@@ -121,13 +121,13 @@ class StealChecker:
     def print_stealcheck(self, uuid=False):
         usages = self.stealcheck()
         if uuid:
-            print("UUID\t\t\t\t%cpu_use\t%cpu_steal")
+            print("{:<40s}{:>16s}{:>16s}".format("Domain UUID", "%cpu_use", "%cpu_steal"))
             for usage in usages:
-                print("{:s}\t{:8.2%}\t{:8.2%}".format(usages[k]['UUID'], usages[k]['cpu_use'], usages[k]['cpu_steal']))
+                print("{:<40s}{:>16.2%}{:>16.2%}".format(usages[k]['UUID'], usages[k]['cpu_use'], usages[k]['cpu_steal']))
         else:
-            print("domain\t\t\t%cpu_use\t%cpu_steal")
+            print("{:<24s}{:>16s}{:>16s}".format("Domain ID", "%cpu_use", "%cpu_steal"))
             for k in usages:
-                print("{:s}\t{:8.2%}\t{:8.2%}".format(k, usages[k]['cpu_use'], usages[k]['cpu_steal']))
+                print("{:<24s}{:>16.2%}{:>16.2%}".format(k, usages[k]['cpu_use'], usages[k]['cpu_steal']))
 
 
 def main():
