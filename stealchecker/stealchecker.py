@@ -122,7 +122,7 @@ class StealChecker:
         usages = self.stealcheck()
         if uuid:
             print("{:<40s}{:>16s}{:>16s}".format("Domain UUID", "%cpu_use", "%cpu_steal"))
-            for usage in usages:
+            for k in usages:
                 print("{:<40s}{:>16.2%}{:>16.2%}".format(usages[k]['UUID'], usages[k]['cpu_use'], usages[k]['cpu_steal']))
         else:
             print("{:<24s}{:>16s}{:>16s}".format("Domain ID", "%cpu_use", "%cpu_steal"))
@@ -130,8 +130,35 @@ class StealChecker:
                 print("{:<24s}{:>16.2%}{:>16.2%}".format(k, usages[k]['cpu_use'], usages[k]['cpu_steal']))
 
 
+class CommandStealChecker():
+
+    def __init__(self):
+        self.sc = StealChecker()
+
+    def command(self):
+        parser = argparse.ArgumentParser(
+            prog='stealcheck',
+            usage='%(prog)s [-h]',
+            description='')
+        subparsers = parser.add_subparsers()
+
+        parser_check = subparsers.add_parser('check', help='see `%(prog)s check -h`')
+        parser_check.add_argument('-u', '--uuid', action='store_true', help='print uuid')
+        parser_check.set_defaults(handler=self.command_check)
+
+        args = parser.parse_args()
+        if hasattr(args, 'handler'):
+            args.handler(args)
+        else:
+            parser.print_help()
+
+    def command_check(self, args):
+        self.sc.print_stealcheck(uuid=args.uuid)
+
+
 def main():
-    StealChecker().print_stealcheck()
+    cmd = CommandStealChecker()
+    cmd.command()
 
 
 if __name__ == "__main__":
