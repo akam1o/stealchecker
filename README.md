@@ -13,7 +13,7 @@ The principle is as follows:
 
 1. Collect VM info with the virsh command
 2. Collect runqueue wait times from schedstat of vcpu processes
-3. Calculate CPU steal time from the sum of the runqueue wait times per unit time
+3. Calculate CPU steal from the sum of the runqueue wait times per unit time
 
 ## Requirements
 
