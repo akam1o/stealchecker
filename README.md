@@ -2,6 +2,19 @@
 
 Checking CPU steal of VM from virtual host
 
+## About stealchecker
+
+CPU steal time is time stolen from VM by the virtual host. This can be seen with commands such as top and vmstat from VM. But the virtual host cannot see it.
+
+Stealchecker calculates the CPU steal of the VM from the virtual host.
+
+
+The principle is as follows:
+
+1. Collect VM info with the virsh command
+2. Collect runqueue wait times from schedstat of vcpu processes
+3. Calculate CPU steal time from the sum of the runqueue wait times per unit time
+
 ## Usage
 
 *CPU steal is not calculated on the first run
