@@ -15,6 +15,10 @@ The principle is as follows:
 2. Collect runqueue wait times from schedstat of vcpu processes
 3. Calculate CPU steal time from the sum of the runqueue wait times per unit time
 
+## Requirements
+
+Can use the virsh command
+
 ## Usage
 
 *CPU steal is not calculated on the first run
