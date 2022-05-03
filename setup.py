@@ -3,7 +3,7 @@ from io import open
 
 DESCRIPTION = 'stealchecker: Checking CPU steal of VM from virtual host'
 NAME = 'stealchecker'
-AUTHOR = 'Akira KAMIO'
+AUTHOR = 'akam1o'
 AUTHOR_EMAIL = '5158577+akam1o@users.noreply.github.com'
 URL = 'https://github.com/akam1o/stealchecker'
 LICENSE = 'MIT'
