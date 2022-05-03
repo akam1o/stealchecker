@@ -8,9 +8,13 @@ import re
 import subprocess
 import sys
 import time
+import libvirt
 
 
 class StealChecker:
+
+    def __init__(self):
+        self.conn = libvirt.open('qemu:///system')
 
     def res_cmd(self, cmd):
         return subprocess.Popen(
@@ -25,20 +29,12 @@ class StealChecker:
     def res_cmd_no_lfeed(self, cmd):
         return [str(x).rstrip("\n") for x in self.res_cmd_lfeed(cmd)]
 
-    def get_domains(self):
-        res = self.res_cmd_no_lfeed('virsh list')[2:-1]
-        return [l.split()[1] for l in res if l]
-
-    def get_dominfo(self, domain):
-        res = self.res_cmd_no_lfeed('virsh dominfo %s' % domain)
-        ret = {}
-        for line in res:
-            if line:
-                ret[line.split()[0].split(':')[0]] = line.split()[1]
+    def get_dominfos(self):
+        domains = self.conn.listAllDomains()
+        ret = []
+        for domain in domains:
+            ret.append({'Name': domain.name(), 'UUID': domain.UUIDString()})
         return ret
-
-    def get_dominfos(self, domains):
-        return [self.get_dominfo(domain) for domain in domains]
 
     def get_infocpus(self, domain):
         res = self.res_cmd_no_lfeed('virsh qemu-monitor-command --hmp %s "info cpus"' % domain)
@@ -62,8 +58,7 @@ class StealChecker:
     def get_usage_dominfos(self):
         now = time.time()*1000000000
         lastusage = self.read_lastusage()
-        domains = self.get_domains()
-        dominfos = self.get_dominfos(domains)
+        dominfos = self.get_dominfos()
         for dominfo in dominfos:
             pids = self.get_infocpus(dominfo['Name'])
             schedstat = self.get_schedstats(pids)
