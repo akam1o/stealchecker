@@ -8,11 +8,16 @@ AUTHOR_EMAIL = '5158577+akam1o@users.noreply.github.com'
 URL = 'https://github.com/akam1o/stealchecker'
 LICENSE = 'MIT'
 DOWNLOAD_URL = URL
-VERSION = '1.2.0'
+VERSION = '1.2.1'
 PYTHON_REQUIRES = '<3'
 INSTALL_REQUIRES = [
     'libvirt-python<=5.10'
 ]
+ENTRY_POINTS = {
+    'console_scripts': [
+        'stealchecker = stealchecker:stealchecker.main',
+    ]
+}
 PACKAGES = [
     'stealchecker'
 ]
@@ -38,6 +43,7 @@ setup(
     maintainer_email=AUTHOR_EMAIL,
     url=URL,
     download_url=URL,
+    entry_points=ENTRY_POINTS,
     packages=PACKAGES,
     classifiers=CLASSIFIERS,
     license=LICENSE,
