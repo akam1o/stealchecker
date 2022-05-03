@@ -24,7 +24,7 @@ Can use the virsh command
 *CPU steal is not calculated on the first run
 
 ```
-$ sudo stealcheck check
+$ sudo stealchecker check
 Domain ID                       %cpu_use      %cpu_steal
 instance-00000001                 48.68%           0.78%
 instance-00000002                  0.60%           0.02%
@@ -41,7 +41,7 @@ instance-0000000a                 26.37%           0.53%
 Display with domain UUID
 
 ```
-$sudo stealcheck check --uuid
+$sudo stealchecker check --uuid
 Domain UUID                                     %cpu_use      %cpu_steal
 2ab6a587-a844-4377-b7e2-a9380db6e167              41.09%           0.67%
 04170a61-4289-4f77-9b3d-b8b1b366afe3               0.35%           0.02%

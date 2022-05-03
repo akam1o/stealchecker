@@ -5,7 +5,7 @@ setup(
     version="1.0.0",
     entry_points={
         "console_scripts": [
-            "stealcheck = stealchecker:stealchecker.main",
+            "stealchecker = stealchecker:stealchecker.main",
         ]
     },
     packages=["stealchecker"]

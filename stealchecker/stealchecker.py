@@ -137,7 +137,7 @@ class CommandStealChecker():
 
     def command(self):
         parser = argparse.ArgumentParser(
-            prog='stealcheck',
+            prog='stealchecker',
             usage='%(prog)s [-h]',
             description='')
         subparsers = parser.add_subparsers()
