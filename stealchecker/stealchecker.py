@@ -152,6 +152,9 @@ class CommandStealChecker():
 
 
 def main():
+    if not os.getuid() == 0:
+        print("ERROR: You must be root")
+        exit(1)
     cmd = CommandStealChecker()
     cmd.command()
 
