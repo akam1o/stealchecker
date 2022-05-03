@@ -1,4 +1,5 @@
 from setuptools import setup
+from io import open
 
 DESCRIPTION = 'stealchecker: Checking CPU steal of VM from virtual host'
 NAME = 'stealchecker'
