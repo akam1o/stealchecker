@@ -6,7 +6,7 @@ Checking CPU steal of VM from virtual host
 
 CPU steal time is time stolen from VM by the virtual host. This can be seen with commands such as top and vmstat from VM. But the virtual host cannot see it.
 
-Stealchecker calculates the CPU steal of the VM from the virtual host.
+Stealchecker calculates the CPU steal of VM from the virtual host.
 
 
 The principle is as follows:
@@ -17,7 +17,13 @@ The principle is as follows:
 
 ## Requirements
 
-Can use the virsh command
+- Can use the virsh command
+
+## How to install
+
+```
+$ pip install stealchecker
+```
 
 ## Usage
 
