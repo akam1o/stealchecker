@@ -1,6 +1,6 @@
 # stealchecker
 
-Checking CPU steal of VM from virtual host
+Checking CPU steal of VM from the virtual host
 
 ## About stealchecker
 
