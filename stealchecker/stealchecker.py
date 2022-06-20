@@ -24,7 +24,7 @@ class StealChecker:
     def res_cmd_lfeed(self, cmd):
         return subprocess.Popen(
             cmd, stdout=subprocess.PIPE,
-            shell=True).stdout.readlines()
+            shell=True, universal_newlines=True).stdout.readlines()
 
     def res_cmd_no_lfeed(self, cmd):
         return [str(x).rstrip("\n") for x in self.res_cmd_lfeed(cmd)]
@@ -47,12 +47,12 @@ class StealChecker:
         return ret
 
     def get_schedstats(self, pids):
-        ret = {'cpu_times': 0L, 'cpu_runqueues': 0L, 'cpu_contextswitch': 0L}
+        ret = {'cpu_times': 0, 'cpu_runqueues': 0, 'cpu_contextswitch': 0}
         for pid in pids:
             schedstat = self.get_schedstat(pid)
-            ret['cpu_times'] += long(schedstat['cpu_times'])
-            ret['cpu_runqueues'] += long(schedstat['cpu_runqueues'])
-            ret['cpu_contextswitch'] += long(schedstat['cpu_contextswitch'])
+            ret['cpu_times'] += int(schedstat['cpu_times'])
+            ret['cpu_runqueues'] += int(schedstat['cpu_runqueues'])
+            ret['cpu_contextswitch'] += int(schedstat['cpu_contextswitch'])
         return ret
 
     def get_usage_dominfos(self):
@@ -95,9 +95,9 @@ class StealChecker:
                                         'UUID': dominfo['UUID'],
                                         'last_time': dominfo['last_time']}
             except:
-                ret[dominfo['Name']] = {'cpu_times': 0L,
-                                        'cpu_runqueues': 0L,
-                                        'cpu_contextswitch': 0L,
+                ret[dominfo['Name']] = {'cpu_times': 0,
+                                        'cpu_runqueues': 0,
+                                        'cpu_contextswitch': 0,
                                         'last_time': now}
         try:
             with open('/tmp/last_steal.json', 'w') as f:
