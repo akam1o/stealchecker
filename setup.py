@@ -8,7 +8,7 @@ AUTHOR_EMAIL = '5158577+akam1o@users.noreply.github.com'
 URL = 'https://github.com/akam1o/stealchecker'
 LICENSE = 'MIT'
 DOWNLOAD_URL = URL
-VERSION = '1.3.0'
+VERSION = '2.0.0'
 INSTALL_REQUIRES = [
     'libvirt-python'
 ]
@@ -23,8 +23,6 @@ PACKAGES = [
 KEYWORDS = 'libvirt qemu kvm cpu steal'
 CLASSIFIERS=[
     'License :: OSI Approved :: MIT License',
-    'Programming Language :: Python :: 2',
-    'Programming Language :: Python :: 2.7',
     'Programming Language :: Python :: 3',
 
 ]
