@@ -8,6 +8,8 @@ import subprocess
 import sys
 import time
 import libvirt
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 
 
 class StealChecker:
@@ -144,6 +146,32 @@ class StealChecker:
                 print("{:<24s}{:>16.2%}{:>16.2%}".format(k, usages[k]['cpu_use'], usages[k]['cpu_steal']))
 
 
+class StealExporterHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/metrics':
+            sc = StealChecker()
+            usages = sc.stealcheck()
+
+            lines = [
+                '# HELP steal_cpu_use QEMU VM CPU use percent',
+                '# TYPE steal_cpu_use gauge',
+                '# HELP steal_cpu_steal QEMU VM CPU steal percent',
+                '# TYPE steal_cpu_steal gauge',
+            ]
+            for name, info in usages.items():
+                lines.append('steal_cpu_use{name="%s",uuid="%s"} %f' % (name, info['UUID'], info['cpu_use']))
+                lines.append('steal_cpu_steal{name="%s",uuid="%s"} %f' % (name, info['UUID'], info['cpu_steal']))
+            output = '\n'.join(lines) + '\n'
+
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(output.encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+
 class CommandStealChecker():
 
     def __init__(self):
@@ -162,6 +190,10 @@ class CommandStealChecker():
         parser_check.add_argument('--json', action='store_true', help='output as json')
         parser_check.set_defaults(handler=self.command_check)
 
+        parser_exporter = subparsers.add_parser('exporter', help='Run as prometheus exporter')
+        parser_exporter.add_argument('--port', type=int, default=9167)
+        parser_exporter.set_defaults(handler=self.command_exporter)
+
         args = parser.parse_args()
         if hasattr(args, 'handler'):
             args.handler(args)
@@ -170,6 +202,11 @@ class CommandStealChecker():
 
     def command_check(self, args):
         self.sc.print_stealcheck(uuid=args.uuid, as_json=args.json)
+
+    def command_exporter(self, args):
+        server = HTTPServer(('', args.port), StealExporterHandler)
+        print(f"Serving metrics on :{args.port}/metrics")
+        server.serve_forever()
 
 
 def main():
