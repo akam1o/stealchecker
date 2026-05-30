@@ -79,6 +79,55 @@ def is_domain_gone_error(error):
     return 'not found' in message or 'no domain' in message or 'domain is not running' in message
 
 
+def libvirt_error_code(error):
+    try:
+        return error.get_error_code()
+    except Exception:
+        return None
+
+
+def libvirt_error_codes(*names):
+    return set(
+        code for code in (getattr(libvirt, name, None) for name in names)
+        if code is not None
+    )
+
+
+def has_connection_failure_message(error):
+    message = str(error).lower()
+    return any(fragment in message for fragment in (
+        'broken pipe',
+        'client socket is closed',
+        'connection closed',
+        'connection refused',
+        'connection reset',
+        'connection timed out',
+        'failed to connect',
+        'not connected',
+        'transport endpoint is not connected',
+    ))
+
+
+def is_reconnectable_libvirt_error(error):
+    libvirt_error = getattr(libvirt, 'libvirtError', None)
+    if libvirt_error and isinstance(error, libvirt_error):
+        code = libvirt_error_code(error)
+        if code in libvirt_error_codes(
+            'VIR_ERR_NO_CONNECT',
+            'VIR_ERR_INVALID_CONN',
+            'VIR_ERR_RPC',
+        ):
+            return True
+        if code in libvirt_error_codes(
+            'VIR_ERR_INTERNAL_ERROR',
+            'VIR_ERR_SYSTEM_ERROR',
+            'VIR_ERR_NO_SERVER',
+        ):
+            return has_connection_failure_message(error)
+        return False
+    return has_connection_failure_message(error)
+
+
 def parse_command_timeout(value):
     try:
         timeout = float(value)
@@ -166,7 +215,7 @@ class StealChecker:
         try:
             domains = self.conn.listAllDomains()
         except Exception as e:
-            if not self.can_reconnect:
+            if not self.can_reconnect or not is_reconnectable_libvirt_error(e):
                 raise StealCheckerError('failed to list libvirt domains: %s' % e) from e
             try:
                 self.reconnect()

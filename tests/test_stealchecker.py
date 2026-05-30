@@ -27,6 +27,18 @@ class BrokenConnection:
         self.closed = True
 
 
+class ErrorConnection:
+    def __init__(self, error):
+        self.error = error
+        self.closed = False
+
+    def listAllDomains(self):
+        raise self.error
+
+    def close(self):
+        self.closed = True
+
+
 class ReconnectFactory:
     def __init__(self, connections):
         self.connections = list(connections)
@@ -62,12 +74,31 @@ class FakeDomain:
         return self._active
 
 
+class FakeLibvirtError(Exception):
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+    def get_error_code(self):
+        return self.code
+
+
 sys.modules.setdefault(
     'libvirt',
     types.SimpleNamespace(open=lambda uri: FakeConnection()),
 )
 
 from stealchecker import stealchecker  # noqa: E402
+
+stealchecker.libvirt.libvirtError = FakeLibvirtError
+stealchecker.libvirt.VIR_ERR_ACCESS_DENIED = 88
+stealchecker.libvirt.VIR_ERR_INTERNAL_ERROR = 1
+stealchecker.libvirt.VIR_ERR_INVALID_CONN = 6
+stealchecker.libvirt.VIR_ERR_NO_CONNECT = 5
+stealchecker.libvirt.VIR_ERR_NO_DOMAIN = 42
+stealchecker.libvirt.VIR_ERR_NO_SERVER = 95
+stealchecker.libvirt.VIR_ERR_RPC = 39
+stealchecker.libvirt.VIR_ERR_SYSTEM_ERROR = 38
 
 
 class StealCheckerTest(unittest.TestCase):
@@ -306,6 +337,42 @@ class StealCheckerTest(unittest.TestCase):
         }])
         self.assertTrue(stale_conn.closed)
         self.assertIs(checker.conn, fresh_conn)
+
+    def test_get_dominfos_reconnects_after_stale_libvirt_connection(self):
+        stale_conn = ErrorConnection(FakeLibvirtError(
+            'internal error: client socket is closed',
+            stealchecker.libvirt.VIR_ERR_INTERNAL_ERROR,
+        ))
+        fresh_conn = FakeConnection([FakeDomain(name='recovered-vm', uuid='recovered-uuid')])
+        checker = stealchecker.StealChecker(
+            conn_factory=ReconnectFactory([stale_conn, fresh_conn]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        self.assertEqual(checker.get_dominfos(), [{
+            'Name': 'recovered-vm',
+            'UUID': 'recovered-uuid',
+        }])
+        self.assertTrue(stale_conn.closed)
+        self.assertIs(checker.conn, fresh_conn)
+
+    def test_get_dominfos_does_not_reconnect_on_access_denied(self):
+        access_denied_conn = ErrorConnection(FakeLibvirtError(
+            'operation on the object/resource was denied',
+            stealchecker.libvirt.VIR_ERR_ACCESS_DENIED,
+        ))
+        checker = stealchecker.StealChecker(
+            conn_factory=ReconnectFactory([access_denied_conn, FakeConnection()]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        with self.assertRaisesRegex(
+            stealchecker.StealCheckerError,
+            'failed to list libvirt domains: operation on the object/resource was denied',
+        ):
+            checker.get_dominfos()
+        self.assertFalse(access_denied_conn.closed)
+        self.assertIs(checker.conn, access_denied_conn)
 
     def test_explicit_connection_is_not_replaced_by_factory(self):
         broken_conn = BrokenConnection()
