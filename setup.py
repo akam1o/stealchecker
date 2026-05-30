@@ -9,6 +9,7 @@ URL = 'https://github.com/akam1o/stealchecker'
 LICENSE = 'MIT'
 DOWNLOAD_URL = URL
 VERSION = '2.0.0'
+PYTHON_REQUIRES = '>=3.6'
 INSTALL_REQUIRES = [
     'libvirt-python'
 ]
@@ -24,6 +25,15 @@ KEYWORDS = 'libvirt qemu kvm cpu steal'
 CLASSIFIERS = [
     'License :: OSI Approved :: MIT License',
     'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.6',
+    'Programming Language :: Python :: 3.7',
+    'Programming Language :: Python :: 3.8',
+    'Programming Language :: Python :: 3.9',
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+    'Programming Language :: Python :: 3.14',
 
 ]
 with open('README.md', 'r', encoding='utf-8') as fp:
@@ -48,5 +58,6 @@ setup(
     classifiers=CLASSIFIERS,
     license=LICENSE,
     keywords=KEYWORDS,
+    python_requires=PYTHON_REQUIRES,
     install_requires=INSTALL_REQUIRES
 )
