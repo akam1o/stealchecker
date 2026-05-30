@@ -2,33 +2,64 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import fcntl
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 import libvirt
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import threading
+
+
+DEFAULT_STATE_FILE = Path(os.environ.get(
+    'STEALCHECKER_STATE_FILE',
+    '/run/stealchecker/last_steal.json',
+))
+
+
+def empty_schedstat():
+    return {'cpu_times': 0, 'cpu_runqueues': 0, 'cpu_contextswitch': 0}
+
+
+def escape_prometheus_label(value):
+    return str(value).replace('\\', '\\\\').replace('\n', '\\n').replace('"', '\\"')
 
 
 class StealChecker:
 
-    def __init__(self):
-        self.conn = libvirt.open('qemu:///system')
-
-    def res_cmd(self, cmd):
-        return subprocess.Popen(
-            cmd, stdout=subprocess.PIPE,
-            shell=True).communicate()[0]
+    def __init__(self, conn=None, state_file=None):
+        self.conn = conn if conn is not None else libvirt.open('qemu:///system')
+        self.state_file = Path(state_file) if state_file is not None else DEFAULT_STATE_FILE
 
     def res_cmd_lfeed(self, cmd):
-        return subprocess.Popen(
-            cmd, stdout=subprocess.PIPE,
-            shell=True, universal_newlines=True).stdout.readlines()
+        try:
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                text=True,
+            )
+            return result.stdout.splitlines()
+        except OSError:
+            return []
 
-    def res_cmd_no_lfeed(self, cmd):
-        return [str(x).rstrip("\n") for x in self.res_cmd_lfeed(cmd)]
+    def ensure_state_dir(self):
+        parent = self.state_file.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        return parent
+
+    def lock_path(self):
+        return self.state_file.with_suffix(self.state_file.suffix + '.lock')
+
+    def state_lock(self):
+        parent = self.ensure_state_dir()
+        lock_file = open(parent / self.lock_path().name, 'w')
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        return lock_file
 
     def get_dominfos(self):
         domains = self.conn.listAllDomains()
@@ -38,14 +69,19 @@ class StealChecker:
         return ret
 
     def get_infocpus(self, domain):
-        res = self.res_cmd_no_lfeed('virsh qemu-monitor-command --hmp %s "info cpus"' % domain)
-        return [l.split('thread_id=')[1].strip() for l in res if l and 'thread_id=' in l]
+        res = self.res_cmd_lfeed(['virsh', 'qemu-monitor-command', '--hmp', domain, 'info cpus'])
+        return [line.split('thread_id=')[1].strip() for line in res if line and 'thread_id=' in line]
 
     def get_schedstat(self, pid):
-        res = self.res_cmd_no_lfeed('cat /proc/%s/schedstat' % pid)
-        if not res or len(res[0].split()) < 3:
-            return {'cpu_times': 0, 'cpu_runqueues': 0, 'cpu_contextswitch': 0}
-        schedstat = res[0].split()
+        if not str(pid).isdigit():
+            return empty_schedstat()
+        try:
+            with open('/proc/%s/schedstat' % pid, 'r') as f:
+                schedstat = f.readline().split()
+        except OSError:
+            return empty_schedstat()
+        if len(schedstat) < 3:
+            return empty_schedstat()
         ret = {'cpu_times': int(schedstat[0]), 'cpu_runqueues': int(schedstat[1]), 'cpu_contextswitch': int(schedstat[2])}
         return ret
 
@@ -74,17 +110,17 @@ class StealChecker:
                 period = float(now - prev['last_time'])
                 dominfo['cpu_use'] = float(dominfo['cpu_times'] - prev['cpu_times']) / period if period else 0.0
                 dominfo['cpu_steal'] = float(dominfo['cpu_runqueues'] - prev['cpu_runqueues']) / period if period else 0.0
-            except:
+            except (KeyError, TypeError, ValueError):
                 dominfo['cpu_use'] = 0.0
                 dominfo['cpu_steal'] = 0.0
         return dominfos
 
     def read_lastusage(self):
         try:
-            with open('/tmp/last_steal.json', 'r') as f:
+            with open(self.state_file, 'r') as f:
                 res = json.load(f)
                 return res if res else {}
-        except:
+        except (OSError, json.JSONDecodeError, TypeError):
             return {}
 
     def write_usage(self, dominfos):
@@ -101,23 +137,35 @@ class StealChecker:
                     'UUID': dominfo['UUID'],
                     'last_time': dominfo['last_time']
                 }
-            except Exception:
+            except (KeyError, TypeError, ValueError):
                 ret[dominfo['Name']] = {
                     'cpu_times': 0,
                     'cpu_runqueues': 0,
                     'cpu_contextswitch': 0,
                     'last_time': now
                 }
+        tmp_path = None
         try:
-            with open('/tmp/last_steal.json', 'w') as f:
-                f.write(json.dumps(ret))
+            parent = self.ensure_state_dir()
+            fd, tmp_path = tempfile.mkstemp(prefix='.%s.' % self.state_file.name, dir=str(parent))
+            with os.fdopen(fd, 'w') as f:
+                json.dump(ret, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.state_file)
             return True
-        except:
+        except OSError:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
             return False
 
     def stealcheck(self):
-        dominfos = self.get_usage_dominfos()
-        self.write_usage(dominfos)
+        with self.state_lock():
+            dominfos = self.get_usage_dominfos()
+            self.write_usage(dominfos)
         usages = {}
         for dominfo in dominfos:
             usages[dominfo['Name']] = {
@@ -147,9 +195,11 @@ class StealChecker:
 
 
 class StealExporterHandler(BaseHTTPRequestHandler):
+    checker = None
+
     def do_GET(self):
         if self.path == '/metrics':
-            sc = StealChecker()
+            sc = self.checker if self.checker is not None else StealChecker()
             usages = sc.stealcheck()
 
             lines = [
@@ -159,8 +209,10 @@ class StealExporterHandler(BaseHTTPRequestHandler):
                 '# TYPE steal_cpu_steal gauge',
             ]
             for name, info in usages.items():
-                lines.append('steal_cpu_use{name="%s",uuid="%s"} %f' % (name, info['UUID'], info['cpu_use']))
-                lines.append('steal_cpu_steal{name="%s",uuid="%s"} %f' % (name, info['UUID'], info['cpu_steal']))
+                safe_name = escape_prometheus_label(name)
+                safe_uuid = escape_prometheus_label(info['UUID'])
+                lines.append('steal_cpu_use{name="%s",uuid="%s"} %f' % (safe_name, safe_uuid, info['cpu_use']))
+                lines.append('steal_cpu_steal{name="%s",uuid="%s"} %f' % (safe_name, safe_uuid, info['cpu_steal']))
             output = '\n'.join(lines) + '\n'
 
             self.send_response(200)
@@ -175,7 +227,17 @@ class StealExporterHandler(BaseHTTPRequestHandler):
 class CommandStealChecker():
 
     def __init__(self):
-        self.sc = StealChecker()
+        self.sc = None
+
+    def checker(self):
+        if self.sc is None:
+            self.sc = StealChecker()
+        return self.sc
+
+    def require_root(self):
+        if os.geteuid() != 0:
+            print("ERROR: You must be root", file=sys.stderr)
+            raise SystemExit(1)
 
     def command(self):
         parser = argparse.ArgumentParser(
@@ -201,20 +263,21 @@ class CommandStealChecker():
             parser.print_help()
 
     def command_check(self, args):
-        self.sc.print_stealcheck(uuid=args.uuid, as_json=args.json)
+        self.require_root()
+        self.checker().print_stealcheck(uuid=args.uuid, as_json=args.json)
 
     def command_exporter(self, args):
+        self.require_root()
+        StealExporterHandler.checker = self.checker()
         server = HTTPServer(('', args.port), StealExporterHandler)
         print(f"Serving metrics on :{args.port}/metrics")
         server.serve_forever()
 
 
 def main():
-    if not os.getuid() == 0:
-        print("ERROR: You must be root")
-        exit(1)
     cmd = CommandStealChecker()
     cmd.command()
+
 
 if __name__ == "__main__":
     main()

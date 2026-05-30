@@ -14,20 +14,20 @@ INSTALL_REQUIRES = [
 ]
 ENTRY_POINTS = {
     'console_scripts': [
-        'stealchecker = stealchecker:stealchecker.main',
+        'stealchecker = stealchecker.stealchecker:main',
     ]
 }
 PACKAGES = [
     'stealchecker'
 ]
 KEYWORDS = 'libvirt qemu kvm cpu steal'
-CLASSIFIERS=[
+CLASSIFIERS = [
     'License :: OSI Approved :: MIT License',
     'Programming Language :: Python :: 3',
 
 ]
 with open('README.md', 'r', encoding='utf-8') as fp:
-        readme = fp.read()
+    readme = fp.read()
 LONG_DESCRIPTION = readme
 LONG_DESCRIPTION_CONTENT_TYPE = 'text/markdown'
 
