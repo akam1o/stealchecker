@@ -77,11 +77,11 @@ class StealCheckerTest(unittest.TestCase):
 
         self.assertEqual(pids, ['123'])
         self.assertEqual(
-            run.call_args.args[0],
+            run.call_args[0][0],
             ['virsh', 'qemu-monitor-command', '--hmp', 'vm;touch /tmp/pwned', 'info cpus'],
         )
-        self.assertNotIn('shell', run.call_args.kwargs)
-        self.assertEqual(run.call_args.kwargs['timeout'], checker.command_timeout)
+        self.assertNotIn('shell', run.call_args[1])
+        self.assertEqual(run.call_args[1]['timeout'], checker.command_timeout)
 
     def test_get_infocpus_raises_on_virsh_failure(self):
         checker = stealchecker.StealChecker(
