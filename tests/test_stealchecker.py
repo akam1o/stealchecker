@@ -356,6 +356,21 @@ class StealCheckerTest(unittest.TestCase):
         self.assertTrue(stale_conn.closed)
         self.assertIs(checker.conn, fresh_conn)
 
+    def test_get_dominfos_reconnects_when_libvirt_error_code_is_missing(self):
+        stale_conn = ErrorConnection(FakeLibvirtError('connection reset by peer', None))
+        fresh_conn = FakeConnection([FakeDomain(name='recovered-vm', uuid='recovered-uuid')])
+        checker = stealchecker.StealChecker(
+            conn_factory=ReconnectFactory([stale_conn, fresh_conn]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        self.assertEqual(checker.get_dominfos(), [{
+            'Name': 'recovered-vm',
+            'UUID': 'recovered-uuid',
+        }])
+        self.assertTrue(stale_conn.closed)
+        self.assertIs(checker.conn, fresh_conn)
+
     def test_get_dominfos_does_not_reconnect_on_access_denied(self):
         access_denied_conn = ErrorConnection(FakeLibvirtError(
             'operation on the object/resource was denied',
@@ -398,6 +413,27 @@ class StealCheckerTest(unittest.TestCase):
             checker.get_dominfos()
         self.assertTrue(stale_conn.closed)
         self.assertIsNone(checker.conn)
+
+    def test_get_dominfos_recovers_after_reconnect_failure(self):
+        stale_conn = BrokenConnection()
+        factory = ReconnectFactory([stale_conn])
+        checker = stealchecker.StealChecker(
+            conn_factory=factory,
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        with self.assertRaises(stealchecker.StealCheckerError):
+            checker.get_dominfos()
+        self.assertTrue(stale_conn.closed)
+        self.assertIsNone(checker.conn)
+
+        fresh_conn = FakeConnection([FakeDomain(name='recovered-vm', uuid='recovered-uuid')])
+        factory.connections.append(fresh_conn)
+        self.assertEqual(checker.get_dominfos(), [{
+            'Name': 'recovered-vm',
+            'UUID': 'recovered-uuid',
+        }])
+        self.assertIs(checker.conn, fresh_conn)
 
     def test_active_check_errors_do_not_hide_collection_failures(self):
         checker = stealchecker.StealChecker(

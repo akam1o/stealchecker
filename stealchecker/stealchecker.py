@@ -124,6 +124,8 @@ def is_reconnectable_libvirt_error(error):
             'VIR_ERR_NO_SERVER',
         ):
             return has_connection_failure_message(error)
+        if code is None:
+            return has_connection_failure_message(error)
         return False
     return has_connection_failure_message(error)
 
@@ -212,6 +214,13 @@ class StealChecker:
         return lock_file
 
     def get_dominfos(self):
+        if self.conn is None:
+            if not self.can_reconnect:
+                raise StealCheckerError('failed to list libvirt domains: no libvirt connection')
+            try:
+                self.reconnect()
+            except Exception as retry_error:
+                raise StealCheckerError('failed to list libvirt domains after reconnect: %s' % retry_error) from retry_error
         try:
             domains = self.conn.listAllDomains()
         except Exception as e:
