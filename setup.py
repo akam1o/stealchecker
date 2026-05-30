@@ -1,14 +1,14 @@
 from setuptools import setup
 from io import open
 
-DESCRIPTION = 'stealchecker: Checking CPU steal of VM from virtual host'
+DESCRIPTION = 'CLI and Prometheus exporter for QEMU/KVM VM CPU usage and steal time'
 NAME = 'stealchecker'
 AUTHOR = 'akam1o'
 AUTHOR_EMAIL = '5158577+akam1o@users.noreply.github.com'
 URL = 'https://github.com/akam1o/stealchecker'
 LICENSE = 'MIT'
 DOWNLOAD_URL = URL
-VERSION = '2.0.0'
+VERSION = '2.1.0'
 PYTHON_REQUIRES = '>=3.6'
 INSTALL_REQUIRES = [
     'libvirt-python'
