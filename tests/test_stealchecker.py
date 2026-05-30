@@ -27,6 +27,11 @@ class BrokenConnection:
         self.closed = True
 
 
+class FailedReconnect:
+    def __call__(self, uri):
+        raise Exception('libvirt is down')
+
+
 class FakeDomain:
     def __init__(self, name='vm-1', uuid='uuid-1', active=True, active_error=None, name_error=None, uuid_error=None):
         self._name = name
@@ -82,6 +87,20 @@ class StealCheckerTest(unittest.TestCase):
         )
         self.assertNotIn('shell', run.call_args[1])
         self.assertEqual(run.call_args[1]['timeout'], checker.command_timeout)
+
+    def test_get_infocpus_ignores_text_after_thread_id(self):
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection(),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='CPU #0: thread_id=12345 (halted)\nCPU #1: thread_id=67890\n',
+        )
+
+        with mock.patch.object(stealchecker.subprocess, 'run', return_value=completed):
+            self.assertEqual(checker.get_infocpus('vm-1'), ['12345', '67890'])
 
     def test_get_infocpus_raises_on_virsh_failure(self):
         checker = stealchecker.StealChecker(
@@ -285,14 +304,17 @@ class StealCheckerTest(unittest.TestCase):
         self.assertIs(checker.conn, fresh_conn)
 
     def test_get_dominfos_raises_when_reconnect_fails(self):
+        broken_conn = BrokenConnection()
         checker = stealchecker.StealChecker(
-            conn=BrokenConnection(),
-            conn_factory=lambda uri: None,
+            conn=broken_conn,
+            conn_factory=FailedReconnect(),
             state_file='/tmp/unused-stealchecker-test.json',
         )
 
         with self.assertRaises(stealchecker.StealCheckerError):
             checker.get_dominfos()
+        self.assertTrue(broken_conn.closed)
+        self.assertIsNone(checker.conn)
 
     def test_active_check_errors_do_not_hide_collection_failures(self):
         checker = stealchecker.StealChecker(

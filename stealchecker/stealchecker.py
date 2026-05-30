@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,7 @@ DEFAULT_STATE_FILE = Path(os.environ.get(
 ))
 DEFAULT_COMMAND_TIMEOUT = 10.0
 DEFAULT_LIBVIRT_URI = 'qemu:///system'
+THREAD_ID_RE = re.compile(r'thread_id=(\d+)')
 
 
 def empty_schedstat():
@@ -91,6 +93,7 @@ class StealChecker:
 
     def reconnect(self):
         old_conn = getattr(self, 'conn', None)
+        self.conn = None
         if old_conn is not None and hasattr(old_conn, 'close'):
             try:
                 old_conn.close()
@@ -181,7 +184,11 @@ class StealChecker:
 
     def get_infocpus(self, domain):
         res = self.res_cmd_lfeed(['virsh', 'qemu-monitor-command', '--hmp', domain, 'info cpus'])
-        pids = [line.split('thread_id=')[1].strip() for line in res if line and 'thread_id=' in line]
+        pids = []
+        for line in res:
+            match = THREAD_ID_RE.search(line)
+            if match:
+                pids.append(match.group(1))
         if not pids:
             raise StealCheckerError('no vcpu thread_id found for domain %s' % domain)
         return pids
@@ -307,8 +314,7 @@ class StealChecker:
     def stealcheck(self):
         with self.state_lock():
             dominfos = self.get_usage_dominfos()
-            if not self.write_usage(dominfos):
-                raise StealCheckerError('failed to write state file %s' % self.state_file)
+            self.write_usage(dominfos)
         usages = {}
         for dominfo in dominfos:
             usages[dominfo['Name']] = {
