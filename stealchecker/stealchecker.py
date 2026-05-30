@@ -24,14 +24,25 @@ def empty_schedstat():
     return {'cpu_times': 0, 'cpu_runqueues': 0, 'cpu_contextswitch': 0}
 
 
+def empty_usage():
+    return {'cpu_use': 0.0, 'cpu_steal': 0.0}
+
+
 def escape_prometheus_label(value):
     return str(value).replace('\\', '\\\\').replace('\n', '\\n').replace('"', '\\"')
+
+
+class StealCheckerError(Exception):
+    pass
 
 
 class StealChecker:
 
     def __init__(self, conn=None, state_file=None):
-        self.conn = conn if conn is not None else libvirt.open('qemu:///system')
+        try:
+            self.conn = conn if conn is not None else libvirt.open('qemu:///system')
+        except Exception as e:
+            raise StealCheckerError('failed to connect to libvirt: %s' % e) from e
         self.state_file = Path(state_file) if state_file is not None else DEFAULT_STATE_FILE
 
     def res_cmd_lfeed(self, cmd):
@@ -39,17 +50,23 @@ class StealChecker:
             result = subprocess.run(
                 cmd,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 check=False,
                 text=True,
             )
-            return result.stdout.splitlines()
-        except OSError:
-            return []
+        except OSError as e:
+            raise StealCheckerError('failed to run %s: %s' % (' '.join(cmd), e)) from e
+        if result.returncode != 0:
+            error = result.stderr.strip() or 'exit status %s' % result.returncode
+            raise StealCheckerError('failed to run %s: %s' % (' '.join(cmd), error))
+        return result.stdout.splitlines()
 
     def ensure_state_dir(self):
         parent = self.state_file.parent
-        parent.mkdir(parents=True, exist_ok=True)
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise StealCheckerError('failed to create state directory %s: %s' % (parent, e)) from e
         return parent
 
     def lock_path(self):
@@ -57,12 +74,22 @@ class StealChecker:
 
     def state_lock(self):
         parent = self.ensure_state_dir()
-        lock_file = open(parent / self.lock_path().name, 'w')
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        lock_path = parent / self.lock_path().name
+        lock_file = None
+        try:
+            lock_file = open(lock_path, 'w')
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+        except OSError as e:
+            if lock_file:
+                lock_file.close()
+            raise StealCheckerError('failed to lock state file %s: %s' % (lock_path, e)) from e
         return lock_file
 
     def get_dominfos(self):
-        domains = self.conn.listAllDomains()
+        try:
+            domains = self.conn.listAllDomains()
+        except Exception as e:
+            raise StealCheckerError('failed to list libvirt domains: %s' % e) from e
         ret = []
         for domain in domains:
             ret.append({'Name': domain.name(), 'UUID': domain.UUIDString()})
@@ -74,16 +101,30 @@ class StealChecker:
 
     def get_schedstat(self, pid):
         if not str(pid).isdigit():
-            return empty_schedstat()
+            raise StealCheckerError('invalid thread_id from virsh: %s' % pid)
         try:
             with open('/proc/%s/schedstat' % pid, 'r') as f:
                 schedstat = f.readline().split()
-        except OSError:
-            return empty_schedstat()
+        except OSError as e:
+            raise StealCheckerError('failed to read schedstat for pid %s: %s' % (pid, e)) from e
         if len(schedstat) < 3:
-            return empty_schedstat()
-        ret = {'cpu_times': int(schedstat[0]), 'cpu_runqueues': int(schedstat[1]), 'cpu_contextswitch': int(schedstat[2])}
+            raise StealCheckerError('invalid schedstat for pid %s' % pid)
+        try:
+            ret = {'cpu_times': int(schedstat[0]), 'cpu_runqueues': int(schedstat[1]), 'cpu_contextswitch': int(schedstat[2])}
+        except ValueError as e:
+            raise StealCheckerError('invalid schedstat for pid %s' % pid) from e
         return ret
+
+    def calculate_usage(self, dominfo, prev, now):
+        period = float(now - prev['last_time'])
+        if period <= 0:
+            return empty_usage()
+        if dominfo['cpu_times'] < prev['cpu_times'] or dominfo['cpu_runqueues'] < prev['cpu_runqueues']:
+            return empty_usage()
+        return {
+            'cpu_use': float(dominfo['cpu_times'] - prev['cpu_times']) / period,
+            'cpu_steal': float(dominfo['cpu_runqueues'] - prev['cpu_runqueues']) / period,
+        }
 
     def get_schedstats(self, pids):
         ret = {'cpu_times': 0, 'cpu_runqueues': 0, 'cpu_contextswitch': 0}
@@ -107,12 +148,13 @@ class StealChecker:
             dominfo['last_time'] = now
             try:
                 prev = lastusage[dominfo['Name']]
-                period = float(now - prev['last_time'])
-                dominfo['cpu_use'] = float(dominfo['cpu_times'] - prev['cpu_times']) / period if period else 0.0
-                dominfo['cpu_steal'] = float(dominfo['cpu_runqueues'] - prev['cpu_runqueues']) / period if period else 0.0
+                usage = self.calculate_usage(dominfo, prev, now)
+                dominfo['cpu_use'] = usage['cpu_use']
+                dominfo['cpu_steal'] = usage['cpu_steal']
             except (KeyError, TypeError, ValueError):
-                dominfo['cpu_use'] = 0.0
-                dominfo['cpu_steal'] = 0.0
+                usage = empty_usage()
+                dominfo['cpu_use'] = usage['cpu_use']
+                dominfo['cpu_steal'] = usage['cpu_steal']
         return dominfos
 
     def read_lastusage(self):
@@ -154,18 +196,19 @@ class StealChecker:
                 os.fsync(f.fileno())
             os.replace(tmp_path, self.state_file)
             return True
-        except OSError:
+        except OSError as e:
             if tmp_path:
                 try:
                     os.unlink(tmp_path)
                 except OSError:
                     pass
-            return False
+            raise StealCheckerError('failed to write state file %s: %s' % (self.state_file, e)) from e
 
     def stealcheck(self):
         with self.state_lock():
             dominfos = self.get_usage_dominfos()
-            self.write_usage(dominfos)
+            if not self.write_usage(dominfos):
+                raise StealCheckerError('failed to write state file %s' % self.state_file)
         usages = {}
         for dominfo in dominfos:
             usages[dominfo['Name']] = {
@@ -199,8 +242,16 @@ class StealExporterHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/metrics':
-            sc = self.checker if self.checker is not None else StealChecker()
-            usages = sc.stealcheck()
+            try:
+                sc = self.checker if self.checker is not None else StealChecker()
+                usages = sc.stealcheck()
+            except StealCheckerError as e:
+                output = 'stealchecker collection failed: %s\n' % e
+                self.send_response(500)
+                self.send_header('Content-type', 'text/plain')
+                self.end_headers()
+                self.wfile.write(output.encode())
+                return
 
             lines = [
                 '# HELP steal_cpu_use QEMU VM CPU use percent',
@@ -264,11 +315,19 @@ class CommandStealChecker():
 
     def command_check(self, args):
         self.require_root()
-        self.checker().print_stealcheck(uuid=args.uuid, as_json=args.json)
+        try:
+            self.checker().print_stealcheck(uuid=args.uuid, as_json=args.json)
+        except StealCheckerError as e:
+            print("ERROR: %s" % e, file=sys.stderr)
+            raise SystemExit(1)
 
     def command_exporter(self, args):
         self.require_root()
-        StealExporterHandler.checker = self.checker()
+        try:
+            StealExporterHandler.checker = self.checker()
+        except StealCheckerError as e:
+            print("ERROR: %s" % e, file=sys.stderr)
+            raise SystemExit(1)
         server = HTTPServer(('', args.port), StealExporterHandler)
         print(f"Serving metrics on :{args.port}/metrics")
         server.serve_forever()
