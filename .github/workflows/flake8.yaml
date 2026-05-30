@@ -3,18 +3,26 @@ name: Check Syntax
 on:
   push:
     paths:
-      - '*.py'
+      - '**/*.py'
+      - '.github/workflows/flake8.yaml'
+  pull_request:
+    paths:
+      - '**/*.py'
+      - '.github/workflows/flake8.yaml'
 
 jobs:
-  flake8_py2:
+  check:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Setup Python
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v5
         with:
           python-version: 3.9
-          architecture: x64
       - name: Install flake8
         run: pip install flake8
       - name: Run flake8
         run: flake8 --ignore=E501
+      - name: Run tests
+        run: python -m unittest discover -s tests
