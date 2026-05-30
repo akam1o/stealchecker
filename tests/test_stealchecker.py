@@ -17,15 +17,19 @@ class FakeConnection:
 
 
 class FakeDomain:
-    def __init__(self, name='vm-1', uuid='uuid-1'):
+    def __init__(self, name='vm-1', uuid='uuid-1', active=True):
         self._name = name
         self._uuid = uuid
+        self._active = active
 
     def name(self):
         return self._name
 
     def UUIDString(self):
         return self._uuid
+
+    def isActive(self):
+        return self._active
 
 
 sys.modules.setdefault(
@@ -74,6 +78,21 @@ class StealCheckerTest(unittest.TestCase):
             with self.assertRaises(stealchecker.StealCheckerError):
                 checker.get_infocpus('vm-1')
 
+    def test_get_infocpus_raises_when_no_thread_ids_are_found(self):
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection(),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='no cpus available\n',
+        )
+
+        with mock.patch.object(stealchecker.subprocess, 'run', return_value=completed):
+            with self.assertRaises(stealchecker.StealCheckerError):
+                checker.get_infocpus('vm-1')
+
     def test_get_schedstat_rejects_non_numeric_pid(self):
         checker = stealchecker.StealChecker(
             conn=FakeConnection(),
@@ -111,6 +130,74 @@ class StealCheckerTest(unittest.TestCase):
 
             self.assertEqual(usage['cpu_use'], 0.0)
             self.assertEqual(usage['cpu_steal'], 0.0)
+
+    def test_uuid_change_returns_first_sample_values(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_file = Path(tmpdir) / 'last_steal.json'
+            with open(state_file, 'w') as f:
+                json.dump({
+                    'vm-1': {
+                        'UUID': 'old-uuid',
+                        'cpu_times': 100,
+                        'cpu_runqueues': 20,
+                        'cpu_contextswitch': 4,
+                        'last_time': 1000000000,
+                    }
+                }, f)
+            checker = stealchecker.StealChecker(
+                conn=FakeConnection([FakeDomain(uuid='new-uuid')]),
+                state_file=state_file,
+            )
+
+            with mock.patch.object(checker, 'get_infocpus', return_value=['123']):
+                with mock.patch.object(checker, 'get_schedstats', return_value={
+                    'cpu_times': 200,
+                    'cpu_runqueues': 60,
+                    'cpu_contextswitch': 8,
+                }):
+                    with mock.patch.object(stealchecker.time, 'time', return_value=2):
+                        usage = checker.get_usage_dominfos()[0]
+
+            self.assertEqual(usage['cpu_use'], 0.0)
+            self.assertEqual(usage['cpu_steal'], 0.0)
+
+    def test_schedstat_disappearing_skips_domain(self):
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection([FakeDomain()]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        with mock.patch.object(checker, 'get_infocpus', return_value=['123']):
+            with mock.patch.object(checker, 'get_schedstat', side_effect=stealchecker.StealCheckerDomainGone()):
+                self.assertEqual(checker.get_usage_dominfos(), [])
+
+    def test_domain_that_stops_during_collection_is_skipped(self):
+        domain = FakeDomain()
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection([domain]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        def fail_after_domain_stops(domain_name):
+            domain._active = False
+            raise stealchecker.StealCheckerError('domain stopped')
+
+        with mock.patch.object(checker, 'get_infocpus', side_effect=fail_after_domain_stops):
+            self.assertEqual(checker.get_usage_dominfos(), [])
+
+    def test_get_dominfos_skips_inactive_domains(self):
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection([
+                FakeDomain(name='active-vm', uuid='active-uuid'),
+                FakeDomain(name='stopped-vm', uuid='stopped-uuid', active=False),
+            ]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        self.assertEqual(checker.get_dominfos(), [{
+            'Name': 'active-vm',
+            'UUID': 'active-uuid',
+        }])
 
     def test_write_usage_writes_to_configured_state_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:

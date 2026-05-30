@@ -36,6 +36,10 @@ class StealCheckerError(Exception):
     pass
 
 
+class StealCheckerDomainGone(StealCheckerError):
+    pass
+
+
 class StealChecker:
 
     def __init__(self, conn=None, state_file=None):
@@ -91,13 +95,34 @@ class StealChecker:
         except Exception as e:
             raise StealCheckerError('failed to list libvirt domains: %s' % e) from e
         ret = []
+        self.domains_by_name = {}
         for domain in domains:
-            ret.append({'Name': domain.name(), 'UUID': domain.UUIDString()})
+            try:
+                if hasattr(domain, 'isActive') and not domain.isActive():
+                    continue
+                name = domain.name()
+                uuid = domain.UUIDString()
+            except Exception as e:
+                raise StealCheckerError('failed to inspect libvirt domain: %s' % e) from e
+            self.domains_by_name[name] = domain
+            ret.append({'Name': name, 'UUID': uuid})
         return ret
+
+    def is_domain_active(self, name):
+        domain = getattr(self, 'domains_by_name', {}).get(name)
+        if domain is None or not hasattr(domain, 'isActive'):
+            return True
+        try:
+            return bool(domain.isActive())
+        except Exception:
+            return False
 
     def get_infocpus(self, domain):
         res = self.res_cmd_lfeed(['virsh', 'qemu-monitor-command', '--hmp', domain, 'info cpus'])
-        return [line.split('thread_id=')[1].strip() for line in res if line and 'thread_id=' in line]
+        pids = [line.split('thread_id=')[1].strip() for line in res if line and 'thread_id=' in line]
+        if not pids:
+            raise StealCheckerError('no vcpu thread_id found for domain %s' % domain)
+        return pids
 
     def get_schedstat(self, pid):
         if not str(pid).isdigit():
@@ -105,6 +130,8 @@ class StealChecker:
         try:
             with open('/proc/%s/schedstat' % pid, 'r') as f:
                 schedstat = f.readline().split()
+        except FileNotFoundError as e:
+            raise StealCheckerDomainGone('schedstat disappeared for pid %s' % pid) from e
         except OSError as e:
             raise StealCheckerError('failed to read schedstat for pid %s: %s' % (pid, e)) from e
         if len(schedstat) < 3:
@@ -118,6 +145,8 @@ class StealChecker:
     def calculate_usage(self, dominfo, prev, now):
         period = float(now - prev['last_time'])
         if period <= 0:
+            return empty_usage()
+        if prev.get('UUID') != dominfo['UUID']:
             return empty_usage()
         if dominfo['cpu_times'] < prev['cpu_times'] or dominfo['cpu_runqueues'] < prev['cpu_runqueues']:
             return empty_usage()
@@ -139,9 +168,17 @@ class StealChecker:
         now = time.time() * 1e9
         lastusage = self.read_lastusage()
         dominfos = self.get_dominfos()
+        usages = []
         for dominfo in dominfos:
-            pids = self.get_infocpus(dominfo['Name'])
-            schedstat = self.get_schedstats(pids)
+            try:
+                pids = self.get_infocpus(dominfo['Name'])
+                schedstat = self.get_schedstats(pids)
+            except StealCheckerDomainGone:
+                continue
+            except StealCheckerError:
+                if not self.is_domain_active(dominfo['Name']):
+                    continue
+                raise
             dominfo['cpu_times'] = schedstat['cpu_times']
             dominfo['cpu_runqueues'] = schedstat['cpu_runqueues']
             dominfo['cpu_contextswitch'] = schedstat['cpu_contextswitch']
@@ -155,7 +192,8 @@ class StealChecker:
                 usage = empty_usage()
                 dominfo['cpu_use'] = usage['cpu_use']
                 dominfo['cpu_steal'] = usage['cpu_steal']
-        return dominfos
+            usages.append(dominfo)
+        return usages
 
     def read_lastusage(self):
         try:
