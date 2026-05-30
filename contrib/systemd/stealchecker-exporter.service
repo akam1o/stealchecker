@@ -1,0 +1,24 @@
+[Unit]
+Description=Stealchecker Prometheus exporter
+Documentation=https://github.com/akam1o/stealchecker
+After=network-online.target libvirtd.service virtqemud.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+RuntimeDirectory=stealchecker
+RuntimeDirectoryMode=0755
+Environment=STEALCHECKER_STATE_FILE=/run/stealchecker/last_steal.json
+Environment=STEALCHECKER_COMMAND_TIMEOUT=10
+ExecStart=/usr/local/bin/stealchecker exporter --port 9167
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
