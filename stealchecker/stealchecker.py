@@ -41,6 +41,24 @@ def escape_prometheus_label(value):
     return str(value).replace('\\', '\\\\').replace('\n', '\\n').replace('"', '\\"')
 
 
+def format_prometheus_metrics(usages):
+    lines = [
+        '# HELP steal_cpu_use QEMU VM CPU use percent',
+        '# TYPE steal_cpu_use gauge',
+        '# HELP steal_cpu_steal QEMU VM CPU steal percent',
+        '# TYPE steal_cpu_steal gauge',
+    ]
+    for name, info in usages.items():
+        safe_name = escape_prometheus_label(name)
+        safe_uuid = escape_prometheus_label(info['UUID'])
+        lines.append('steal_cpu_use{name="%s",uuid="%s"} %f' % (safe_name, safe_uuid, info['cpu_use']))
+    for name, info in usages.items():
+        safe_name = escape_prometheus_label(name)
+        safe_uuid = escape_prometheus_label(info['UUID'])
+        lines.append('steal_cpu_steal{name="%s",uuid="%s"} %f' % (safe_name, safe_uuid, info['cpu_steal']))
+    return '\n'.join(lines) + '\n'
+
+
 class StealCheckerError(Exception):
     pass
 
@@ -76,7 +94,7 @@ class StealChecker:
     def __init__(self, conn=None, state_file=None, command_timeout=None, conn_uri=None, conn_factory=None):
         self.conn_uri = conn_uri if conn_uri is not None else DEFAULT_LIBVIRT_URI
         self.conn_factory = conn_factory if conn_factory is not None else libvirt.open
-        self.can_reconnect = conn is None or conn_factory is not None
+        self.can_reconnect = conn is None
         self.conn = conn if conn is not None else self.connect()
         self.state_file = Path(state_file) if state_file is not None else DEFAULT_STATE_FILE
         timeout = command_timeout if command_timeout is not None else os.environ.get('STEALCHECKER_COMMAND_TIMEOUT', DEFAULT_COMMAND_TIMEOUT)
@@ -359,18 +377,7 @@ class StealExporterHandler(BaseHTTPRequestHandler):
                 self.wfile.write(output.encode())
                 return
 
-            lines = [
-                '# HELP steal_cpu_use QEMU VM CPU use percent',
-                '# TYPE steal_cpu_use gauge',
-                '# HELP steal_cpu_steal QEMU VM CPU steal percent',
-                '# TYPE steal_cpu_steal gauge',
-            ]
-            for name, info in usages.items():
-                safe_name = escape_prometheus_label(name)
-                safe_uuid = escape_prometheus_label(info['UUID'])
-                lines.append('steal_cpu_use{name="%s",uuid="%s"} %f' % (safe_name, safe_uuid, info['cpu_use']))
-                lines.append('steal_cpu_steal{name="%s",uuid="%s"} %f' % (safe_name, safe_uuid, info['cpu_steal']))
-            output = '\n'.join(lines) + '\n'
+            output = format_prometheus_metrics(usages)
 
             self.send_response(200)
             self.send_header('Content-type', 'text/plain')

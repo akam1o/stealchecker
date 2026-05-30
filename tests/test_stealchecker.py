@@ -27,9 +27,14 @@ class BrokenConnection:
         self.closed = True
 
 
-class FailedReconnect:
+class ReconnectFactory:
+    def __init__(self, connections):
+        self.connections = list(connections)
+
     def __call__(self, uri):
-        raise Exception('libvirt is down')
+        if not self.connections:
+            raise Exception('no more connections')
+        return self.connections.pop(0)
 
 
 class FakeDomain:
@@ -291,8 +296,7 @@ class StealCheckerTest(unittest.TestCase):
         stale_conn = BrokenConnection()
         fresh_conn = FakeConnection([FakeDomain(name='recovered-vm', uuid='recovered-uuid')])
         checker = stealchecker.StealChecker(
-            conn=stale_conn,
-            conn_factory=lambda uri: fresh_conn,
+            conn_factory=ReconnectFactory([stale_conn, fresh_conn]),
             state_file='/tmp/unused-stealchecker-test.json',
         )
 
@@ -303,17 +307,29 @@ class StealCheckerTest(unittest.TestCase):
         self.assertTrue(stale_conn.closed)
         self.assertIs(checker.conn, fresh_conn)
 
-    def test_get_dominfos_raises_when_reconnect_fails(self):
+    def test_explicit_connection_is_not_replaced_by_factory(self):
         broken_conn = BrokenConnection()
         checker = stealchecker.StealChecker(
             conn=broken_conn,
-            conn_factory=FailedReconnect(),
+            conn_factory=lambda uri: FakeConnection(),
             state_file='/tmp/unused-stealchecker-test.json',
         )
 
         with self.assertRaises(stealchecker.StealCheckerError):
             checker.get_dominfos()
-        self.assertTrue(broken_conn.closed)
+        self.assertFalse(broken_conn.closed)
+        self.assertIs(checker.conn, broken_conn)
+
+    def test_get_dominfos_raises_when_reconnect_fails(self):
+        stale_conn = BrokenConnection()
+        checker = stealchecker.StealChecker(
+            conn_factory=ReconnectFactory([stale_conn]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        with self.assertRaises(stealchecker.StealCheckerError):
+            checker.get_dominfos()
+        self.assertTrue(stale_conn.closed)
         self.assertIsNone(checker.conn)
 
     def test_active_check_errors_do_not_hide_collection_failures(self):
@@ -396,6 +412,22 @@ class StealCheckerTest(unittest.TestCase):
             stealchecker.escape_prometheus_label('vm"name\\zone\n'),
             'vm\\"name\\\\zone\\n',
         )
+
+    def test_prometheus_metrics_are_grouped_by_metric_name(self):
+        output = stealchecker.format_prometheus_metrics({
+            'vm-1': {'UUID': 'uuid-1', 'cpu_use': 0.1, 'cpu_steal': 0.01},
+            'vm-2': {'UUID': 'uuid-2', 'cpu_use': 0.2, 'cpu_steal': 0.02},
+        })
+
+        sample_lines = [line for line in output.splitlines() if line.startswith('steal_')]
+        self.assertEqual([
+            line.split('{', 1)[0] for line in sample_lines
+        ], [
+            'steal_cpu_use',
+            'steal_cpu_use',
+            'steal_cpu_steal',
+            'steal_cpu_steal',
+        ])
 
 
 if __name__ == '__main__':
