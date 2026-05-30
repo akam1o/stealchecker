@@ -11,7 +11,12 @@ import sys
 import tempfile
 import time
 import libvirt
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+
+try:
+    from http.server import ThreadingHTTPServer as MetricsHTTPServer
+except ImportError:
+    from http.server import HTTPServer as MetricsHTTPServer
 
 
 DEFAULT_STATE_FILE = Path(os.environ.get(
@@ -81,7 +86,7 @@ class StealChecker:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=False,
-                text=True,
+                universal_newlines=True,
                 timeout=self.command_timeout,
             )
         except subprocess.TimeoutExpired as e:
@@ -398,7 +403,7 @@ class CommandStealChecker():
         except StealCheckerError as e:
             print("ERROR: %s" % e, file=sys.stderr)
             raise SystemExit(1)
-        server = ThreadingHTTPServer(('', args.port), StealExporterHandler)
+        server = MetricsHTTPServer(('', args.port), StealExporterHandler)
         print(f"Serving metrics on :{args.port}/metrics")
         server.serve_forever()
 

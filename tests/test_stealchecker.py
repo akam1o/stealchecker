@@ -288,13 +288,13 @@ class StealCheckerTest(unittest.TestCase):
             with mock.patch.object(checker, 'get_infocpus', side_effect=stealchecker.StealCheckerError('virsh failed')):
                 self.assertEqual(checker.get_usage_dominfos(), [])
 
-    def test_exporter_uses_threading_http_server(self):
+    def test_exporter_uses_metrics_http_server(self):
         cmd = stealchecker.CommandStealChecker()
         args = types.SimpleNamespace(port=9167)
 
         with mock.patch.object(cmd, 'require_root'):
             with mock.patch.object(cmd, 'checker', return_value=object()):
-                with mock.patch.object(stealchecker, 'ThreadingHTTPServer') as server:
+                with mock.patch.object(stealchecker, 'MetricsHTTPServer') as server:
                     with mock.patch('builtins.print'):
                         cmd.command_exporter(args)
 
