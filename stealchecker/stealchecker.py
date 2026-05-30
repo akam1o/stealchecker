@@ -11,13 +11,14 @@ import sys
 import tempfile
 import time
 import libvirt
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 DEFAULT_STATE_FILE = Path(os.environ.get(
     'STEALCHECKER_STATE_FILE',
     '/run/stealchecker/last_steal.json',
 ))
+DEFAULT_COMMAND_TIMEOUT = 10.0
 
 
 def empty_schedstat():
@@ -40,14 +41,38 @@ class StealCheckerDomainGone(StealCheckerError):
     pass
 
 
+def is_domain_gone_error(error):
+    libvirt_error = getattr(libvirt, 'libvirtError', None)
+    no_domain_code = getattr(libvirt, 'VIR_ERR_NO_DOMAIN', None)
+    if libvirt_error and isinstance(error, libvirt_error) and no_domain_code is not None:
+        try:
+            return error.get_error_code() == no_domain_code
+        except Exception:
+            pass
+    message = str(error).lower()
+    return 'not found' in message or 'no domain' in message or 'domain is not running' in message
+
+
+def parse_command_timeout(value):
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as e:
+        raise StealCheckerError('invalid command timeout: %s' % value) from e
+    if timeout <= 0:
+        raise StealCheckerError('invalid command timeout: %s' % value)
+    return timeout
+
+
 class StealChecker:
 
-    def __init__(self, conn=None, state_file=None):
+    def __init__(self, conn=None, state_file=None, command_timeout=None):
         try:
             self.conn = conn if conn is not None else libvirt.open('qemu:///system')
         except Exception as e:
             raise StealCheckerError('failed to connect to libvirt: %s' % e) from e
         self.state_file = Path(state_file) if state_file is not None else DEFAULT_STATE_FILE
+        timeout = command_timeout if command_timeout is not None else os.environ.get('STEALCHECKER_COMMAND_TIMEOUT', DEFAULT_COMMAND_TIMEOUT)
+        self.command_timeout = parse_command_timeout(timeout)
 
     def res_cmd_lfeed(self, cmd):
         try:
@@ -57,7 +82,10 @@ class StealChecker:
                 stderr=subprocess.PIPE,
                 check=False,
                 text=True,
+                timeout=self.command_timeout,
             )
+        except subprocess.TimeoutExpired as e:
+            raise StealCheckerError('timed out running %s after %s seconds' % (' '.join(cmd), self.command_timeout)) from e
         except OSError as e:
             raise StealCheckerError('failed to run %s: %s' % (' '.join(cmd), e)) from e
         if result.returncode != 0:
@@ -103,6 +131,8 @@ class StealChecker:
                 name = domain.name()
                 uuid = domain.UUIDString()
             except Exception as e:
+                if is_domain_gone_error(e):
+                    continue
                 raise StealCheckerError('failed to inspect libvirt domain: %s' % e) from e
             self.domains_by_name[name] = domain
             ret.append({'Name': name, 'UUID': uuid})
@@ -114,8 +144,10 @@ class StealChecker:
             return True
         try:
             return bool(domain.isActive())
-        except Exception:
-            return False
+        except Exception as e:
+            if is_domain_gone_error(e):
+                return False
+            return None
 
     def get_infocpus(self, domain):
         res = self.res_cmd_lfeed(['virsh', 'qemu-monitor-command', '--hmp', domain, 'info cpus'])
@@ -176,7 +208,7 @@ class StealChecker:
             except StealCheckerDomainGone:
                 continue
             except StealCheckerError:
-                if not self.is_domain_active(dominfo['Name']):
+                if self.is_domain_active(dominfo['Name']) is False:
                     continue
                 raise
             dominfo['cpu_times'] = schedstat['cpu_times']
@@ -366,7 +398,7 @@ class CommandStealChecker():
         except StealCheckerError as e:
             print("ERROR: %s" % e, file=sys.stderr)
             raise SystemExit(1)
-        server = HTTPServer(('', args.port), StealExporterHandler)
+        server = ThreadingHTTPServer(('', args.port), StealExporterHandler)
         print(f"Serving metrics on :{args.port}/metrics")
         server.serve_forever()
 

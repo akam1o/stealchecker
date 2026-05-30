@@ -17,18 +17,27 @@ class FakeConnection:
 
 
 class FakeDomain:
-    def __init__(self, name='vm-1', uuid='uuid-1', active=True):
+    def __init__(self, name='vm-1', uuid='uuid-1', active=True, active_error=None, name_error=None, uuid_error=None):
         self._name = name
         self._uuid = uuid
         self._active = active
+        self._active_error = active_error
+        self._name_error = name_error
+        self._uuid_error = uuid_error
 
     def name(self):
+        if self._name_error:
+            raise self._name_error
         return self._name
 
     def UUIDString(self):
+        if self._uuid_error:
+            raise self._uuid_error
         return self._uuid
 
     def isActive(self):
+        if self._active_error:
+            raise self._active_error
         return self._active
 
 
@@ -61,6 +70,7 @@ class StealCheckerTest(unittest.TestCase):
             ['virsh', 'qemu-monitor-command', '--hmp', 'vm;touch /tmp/pwned', 'info cpus'],
         )
         self.assertNotIn('shell', run.call_args.kwargs)
+        self.assertEqual(run.call_args.kwargs['timeout'], checker.command_timeout)
 
     def test_get_infocpus_raises_on_virsh_failure(self):
         checker = stealchecker.StealChecker(
@@ -77,6 +87,29 @@ class StealCheckerTest(unittest.TestCase):
         with mock.patch.object(stealchecker.subprocess, 'run', return_value=completed):
             with self.assertRaises(stealchecker.StealCheckerError):
                 checker.get_infocpus('vm-1')
+
+    def test_get_infocpus_raises_on_timeout(self):
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection(),
+            state_file='/tmp/unused-stealchecker-test.json',
+            command_timeout=1,
+        )
+
+        with mock.patch.object(
+            stealchecker.subprocess,
+            'run',
+            side_effect=subprocess.TimeoutExpired(['virsh'], 1),
+        ):
+            with self.assertRaises(stealchecker.StealCheckerError):
+                checker.get_infocpus('vm-1')
+
+    def test_invalid_command_timeout_is_rejected(self):
+        with self.assertRaises(stealchecker.StealCheckerError):
+            stealchecker.StealChecker(
+                conn=FakeConnection(),
+                state_file='/tmp/unused-stealchecker-test.json',
+                command_timeout='invalid',
+            )
 
     def test_get_infocpus_raises_when_no_thread_ids_are_found(self):
         checker = stealchecker.StealChecker(
@@ -198,6 +231,75 @@ class StealCheckerTest(unittest.TestCase):
             'Name': 'active-vm',
             'UUID': 'active-uuid',
         }])
+
+    def test_get_dominfos_skips_domains_that_disappear(self):
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection([
+                FakeDomain(name='active-vm', uuid='active-uuid'),
+                FakeDomain(name_error=Exception('domain not found')),
+            ]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        self.assertEqual(checker.get_dominfos(), [{
+            'Name': 'active-vm',
+            'UUID': 'active-uuid',
+        }])
+
+    def test_get_dominfos_raises_on_unexpected_inspection_error(self):
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection([
+                FakeDomain(name_error=Exception('connection reset')),
+            ]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        with self.assertRaises(stealchecker.StealCheckerError):
+            checker.get_dominfos()
+
+    def test_active_check_errors_do_not_hide_collection_failures(self):
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection([
+                FakeDomain(active_error=Exception('connection reset')),
+            ]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        with mock.patch.object(checker, 'get_dominfos', return_value=[{
+            'Name': 'vm-1',
+            'UUID': 'uuid-1',
+        }]):
+            checker.domains_by_name = {'vm-1': FakeDomain(active_error=Exception('connection reset'))}
+            with mock.patch.object(checker, 'get_infocpus', side_effect=stealchecker.StealCheckerError('virsh failed')):
+                with self.assertRaises(stealchecker.StealCheckerError):
+                    checker.get_usage_dominfos()
+
+    def test_domain_gone_active_check_skips_collection_failure(self):
+        checker = stealchecker.StealChecker(
+            conn=FakeConnection(),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        with mock.patch.object(checker, 'get_dominfos', return_value=[{
+            'Name': 'vm-1',
+            'UUID': 'uuid-1',
+        }]):
+            checker.domains_by_name = {'vm-1': FakeDomain(active_error=Exception('domain not found'))}
+            with mock.patch.object(checker, 'get_infocpus', side_effect=stealchecker.StealCheckerError('virsh failed')):
+                self.assertEqual(checker.get_usage_dominfos(), [])
+
+    def test_exporter_uses_threading_http_server(self):
+        cmd = stealchecker.CommandStealChecker()
+        args = types.SimpleNamespace(port=9167)
+
+        with mock.patch.object(cmd, 'require_root'):
+            with mock.patch.object(cmd, 'checker', return_value=object()):
+                with mock.patch.object(stealchecker, 'ThreadingHTTPServer') as server:
+                    with mock.patch('builtins.print'):
+                        cmd.command_exporter(args)
+
+        server.assert_called_once_with(('', 9167), stealchecker.StealExporterHandler)
+        server.return_value.serve_forever.assert_called_once()
 
     def test_write_usage_writes_to_configured_state_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
