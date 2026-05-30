@@ -16,6 +16,17 @@ class FakeConnection:
         return self.domains
 
 
+class BrokenConnection:
+    def __init__(self):
+        self.closed = False
+
+    def listAllDomains(self):
+        raise Exception('connection closed')
+
+    def close(self):
+        self.closed = True
+
+
 class FakeDomain:
     def __init__(self, name='vm-1', uuid='uuid-1', active=True, active_error=None, name_error=None, uuid_error=None):
         self._name = name
@@ -251,6 +262,32 @@ class StealCheckerTest(unittest.TestCase):
             conn=FakeConnection([
                 FakeDomain(name_error=Exception('connection reset')),
             ]),
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        with self.assertRaises(stealchecker.StealCheckerError):
+            checker.get_dominfos()
+
+    def test_get_dominfos_reconnects_after_connection_failure(self):
+        stale_conn = BrokenConnection()
+        fresh_conn = FakeConnection([FakeDomain(name='recovered-vm', uuid='recovered-uuid')])
+        checker = stealchecker.StealChecker(
+            conn=stale_conn,
+            conn_factory=lambda uri: fresh_conn,
+            state_file='/tmp/unused-stealchecker-test.json',
+        )
+
+        self.assertEqual(checker.get_dominfos(), [{
+            'Name': 'recovered-vm',
+            'UUID': 'recovered-uuid',
+        }])
+        self.assertTrue(stale_conn.closed)
+        self.assertIs(checker.conn, fresh_conn)
+
+    def test_get_dominfos_raises_when_reconnect_fails(self):
+        checker = stealchecker.StealChecker(
+            conn=BrokenConnection(),
+            conn_factory=lambda uri: None,
             state_file='/tmp/unused-stealchecker-test.json',
         )
 

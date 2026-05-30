@@ -24,6 +24,7 @@ DEFAULT_STATE_FILE = Path(os.environ.get(
     '/run/stealchecker/last_steal.json',
 ))
 DEFAULT_COMMAND_TIMEOUT = 10.0
+DEFAULT_LIBVIRT_URI = 'qemu:///system'
 
 
 def empty_schedstat():
@@ -70,14 +71,32 @@ def parse_command_timeout(value):
 
 class StealChecker:
 
-    def __init__(self, conn=None, state_file=None, command_timeout=None):
-        try:
-            self.conn = conn if conn is not None else libvirt.open('qemu:///system')
-        except Exception as e:
-            raise StealCheckerError('failed to connect to libvirt: %s' % e) from e
+    def __init__(self, conn=None, state_file=None, command_timeout=None, conn_uri=None, conn_factory=None):
+        self.conn_uri = conn_uri if conn_uri is not None else DEFAULT_LIBVIRT_URI
+        self.conn_factory = conn_factory if conn_factory is not None else libvirt.open
+        self.can_reconnect = conn is None or conn_factory is not None
+        self.conn = conn if conn is not None else self.connect()
         self.state_file = Path(state_file) if state_file is not None else DEFAULT_STATE_FILE
         timeout = command_timeout if command_timeout is not None else os.environ.get('STEALCHECKER_COMMAND_TIMEOUT', DEFAULT_COMMAND_TIMEOUT)
         self.command_timeout = parse_command_timeout(timeout)
+
+    def connect(self):
+        try:
+            conn = self.conn_factory(self.conn_uri)
+        except Exception as e:
+            raise StealCheckerError('failed to connect to libvirt: %s' % e) from e
+        if conn is None:
+            raise StealCheckerError('failed to connect to libvirt')
+        return conn
+
+    def reconnect(self):
+        old_conn = getattr(self, 'conn', None)
+        if old_conn is not None and hasattr(old_conn, 'close'):
+            try:
+                old_conn.close()
+            except Exception:
+                pass
+        self.conn = self.connect()
 
     def res_cmd_lfeed(self, cmd):
         try:
@@ -126,7 +145,13 @@ class StealChecker:
         try:
             domains = self.conn.listAllDomains()
         except Exception as e:
-            raise StealCheckerError('failed to list libvirt domains: %s' % e) from e
+            if not self.can_reconnect:
+                raise StealCheckerError('failed to list libvirt domains: %s' % e) from e
+            try:
+                self.reconnect()
+                domains = self.conn.listAllDomains()
+            except Exception as retry_error:
+                raise StealCheckerError('failed to list libvirt domains after reconnect: %s' % retry_error) from retry_error
         ret = []
         self.domains_by_name = {}
         for domain in domains:
